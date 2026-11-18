@@ -1,6 +1,7 @@
 export const BROWSER_WHISPER_MODELS: Record<string, { id: string; size: string }> = {
   "tiny.en": { id: "Xenova/whisper-tiny.en", size: "~40 MB" },
   "base.en": { id: "Xenova/whisper-base.en", size: "~75 MB" },
+  "distil-small.en": { id: "distil-whisper/distil-small.en", size: "~165 MB" },
 };
 
 const DEFAULT_MODEL = "tiny.en";

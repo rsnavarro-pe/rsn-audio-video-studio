@@ -598,6 +598,7 @@ const browserApi = {
     return [
       { name: "tiny.en", size: "~40 MB", downloaded: true, path: "Xenova/whisper-tiny.en" },
       { name: "base.en", size: "~75 MB", downloaded: true, path: "Xenova/whisper-base.en" },
+      { name: "distil-small.en", size: "~165 MB", downloaded: true, path: "distil-whisper/distil-small.en" },
     ];
   },
 
@@ -652,7 +653,11 @@ const browserApi = {
       saveLocalSettings(currentSettings);
       return;
     }
-    const name = modelPath.includes("base.en") ? "base.en" : "tiny.en";
+    const name = modelPath.includes("distil-small.en")
+      ? "distil-small.en"
+      : modelPath.includes("base.en")
+      ? "base.en"
+      : "tiny.en";
     await loadBrowserWhisper(name);
     currentSettings.model_name = name;
     currentSettings.model_path = modelPath;
