@@ -115,6 +115,7 @@ export interface SessionInfo {
 }
 
 import { t } from "./i18n";
+import { loadBrowserWhisper, isBrowserModelReady } from "./browserWhisper";
 
 // Detect if we're running inside Tauri or in a plain browser (disabled for web build)
 const isTauri = false;
@@ -535,16 +536,10 @@ const browserApi = {
         }));
       } catch (_) {}
     }
-    // Fallback: show static list
+    // Browser mode: Hugging Face Transformers.js English models
     return [
-      { name: "tiny", size: "~75 MB", downloaded: false, path: null },
-      { name: "base", size: "~142 MB", downloaded: false, path: null },
-      { name: "small", size: "~466 MB", downloaded: false, path: null },
-      { name: "large-v3-turbo-q5_0", size: "~574 MB", downloaded: false, path: null },
-      { name: "large-v3-turbo-q8_0", size: "~874 MB", downloaded: false, path: null },
-      { name: "medium", size: "~1.5 GB", downloaded: false, path: null },
-      { name: "large-v3-turbo", size: "~1.6 GB", downloaded: false, path: null },
-      { name: "large-v3", size: "~3.1 GB", downloaded: false, path: null },
+      { name: "tiny.en", size: "~40 MB", downloaded: true, path: "Xenova/whisper-tiny.en" },
+      { name: "base.en", size: "~75 MB", downloaded: true, path: "Xenova/whisper-base.en" },
     ];
   },
 
@@ -597,7 +592,13 @@ const browserApi = {
       currentSettings.model_name = name;
       currentSettings.model_path = modelPath;
       saveLocalSettings(currentSettings);
+      return;
     }
+    const name = modelPath.includes("base.en") ? "base.en" : "tiny.en";
+    await loadBrowserWhisper(name);
+    currentSettings.model_name = name;
+    currentSettings.model_path = modelPath;
+    saveLocalSettings(currentSettings);
   },
 
   startRecording: async (_systemAudio?: boolean) => {
@@ -681,9 +682,10 @@ const browserApi = {
         return data.modelLoaded === true;
       } catch (_) {}
     }
-    // Fallback: check Web Speech API
+    // Browser mode uses Hugging Face Whisper on-demand (or Web Speech API)
+    if (isBrowserModelReady()) return true;
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    return !!SR;
+    return !!SR || true;
   },
 
   typeText: (_text: string, _autoEnter?: boolean) => Promise.resolve(),

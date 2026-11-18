@@ -1,6 +1,7 @@
 import { createSignal, onMount, onCleanup, Show, For } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { api, type TranscriptionResult, type ModelInfo } from "../lib/api";
+import { transcribeBrowserFile } from "../lib/browserWhisper";
 import { useI18n } from "../lib/i18n";
 
 const isTauri = !!(window as any).__TAURI_INTERNALS__;
@@ -65,10 +66,8 @@ export default function FileTranscriber() {
       const m = await api.getAvailableModels();
       setModels(m);
       const settings = await api.getSettings();
-      setActiveModel(settings.model_name || "");
+      setActiveModel(settings.model_name || m[0]?.name || "tiny.en");
     } catch (_) {}
-
-    if (!isTauri) return;
 
     // Timer to update elapsed time on active jobs
     timerInterval = setInterval(() => {
@@ -129,8 +128,73 @@ export default function FileTranscriber() {
     }
   };
 
+  let fileInputRef: HTMLInputElement | undefined;
+
+  const addBrowserFile = async (file: File) => {
+    const ext = getFileExtension(file.name);
+    if (!AUDIO_EXTENSIONS.includes(ext)) {
+      setStatusMsg(t("fileTranscriber.unsupportedFormat"));
+      setTimeout(() => setStatusMsg(""), 3000);
+      return;
+    }
+
+    const jobId = generateId();
+    const job: FileJob = {
+      id: jobId,
+      filePath: file.name,
+      filename: file.name,
+      status: "transcribing",
+      progress: 0,
+      text: "",
+      language: "en",
+      durationMs: 0,
+      error: "",
+      startedAt: Date.now(),
+      elapsed: 0,
+    };
+
+    setJobs(produce((draft) => { draft.unshift(job); }));
+
+    try {
+      const result = await transcribeBrowserFile(
+        file,
+        activeModel() || "tiny.en",
+        (pct) => {
+          setJobs(produce((draft) => {
+            const j = draft.find((item) => item.id === jobId);
+            if (j && j.status === "transcribing") j.progress = pct;
+          }));
+        }
+      );
+
+      setJobs(produce((draft) => {
+        const j = draft.find((item) => item.id === jobId);
+        if (j && j.status !== "cancelled") {
+          j.status = "done";
+          j.text = result.text;
+          j.language = result.language;
+          j.durationMs = result.duration_ms;
+          j.progress = 100;
+          j.elapsed = Date.now() - j.startedAt;
+        }
+      }));
+    } catch (e) {
+      setJobs(produce((draft) => {
+        const j = draft.find((item) => item.id === jobId);
+        if (j && j.status !== "cancelled") {
+          j.status = "error";
+          j.error = String(e);
+          j.elapsed = Date.now() - j.startedAt;
+        }
+      }));
+    }
+  };
+
   const pickFiles = async () => {
-    if (!isTauri) return;
+    if (!isTauri) {
+      fileInputRef?.click();
+      return;
+    }
   };
 
   const confirmAction = async (message: string): Promise<boolean> => {
@@ -242,10 +306,40 @@ export default function FileTranscriber() {
         </Show>
       </div>
 
+      {/* Hidden file input for browser mode */}
+      <input
+        ref={(el) => { fileInputRef = el; }}
+        type="file"
+        multiple
+        accept="audio/*,video/*"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const files = e.currentTarget.files;
+          if (files) {
+            for (const f of Array.from(files)) {
+              addBrowserFile(f);
+            }
+          }
+          e.currentTarget.value = "";
+        }}
+      />
+
       {/* Drop zone — always clickable */}
       <div
         class={`file-drop-zone ${dragOver() ? "drag-over" : ""}`}
         onClick={pickFiles}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          const files = e.dataTransfer?.files;
+          if (files) {
+            for (const f of Array.from(files)) {
+              addBrowserFile(f);
+            }
+          }
+        }}
       >
         <div class="file-drop-content">
           <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
