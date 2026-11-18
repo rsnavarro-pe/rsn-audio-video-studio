@@ -1,0 +1,776 @@
+export interface Settings {
+  language: string;
+  ui_language: string;
+  model_name: string;
+  model_path: string;
+  use_gpu: boolean;
+  hotkey: string;
+  hotkey_mode: string;
+  auto_paste: boolean;
+  auto_enter?: boolean;
+  audio_device: string;
+  system_audio_device?: string;
+  theme: string;
+  file_auto_save: boolean;
+  file_save_directory: string;
+  file_confirm_actions: boolean;
+  audio_feedback: boolean;
+  // v0.7 new fields
+  incremental_interval?: number;
+  max_parallel_workers?: number;
+  auto_correction_llm?: boolean;
+  meeting_save_directory?: string;
+  speaker_diarization?: boolean;
+  floating_indicator?: boolean;
+  sound_pack?: string;
+  sound_volume?: number;
+  remote_server_enabled?: boolean;
+  // TTS (Higgs Audio v3, local server)
+  tts_enabled?: boolean;
+  tts_server_url?: string;
+  tts_voice?: string;
+  tts_allow_install?: boolean;
+}
+
+export interface SystemAudioStatus {
+  active: boolean;
+  level: number;
+  last_packet_ms_ago: number | null;
+}
+
+export interface ModelInfo {
+  name: string;
+  size: string;
+  downloaded: boolean;
+  path: string | null;
+}
+
+export interface TranscriptionResult {
+  text: string;
+  original_text?: string;
+  language: string;
+  duration_ms: number;
+}
+
+export interface Dictionary {
+  words: Record<string, string | null>;
+}
+
+export interface ProcessInfo {
+  pid: number;
+  name: string;
+  memory_mb: number;
+}
+
+export interface DownloadStart {
+  name: string;
+  dir: string;
+}
+
+export interface DownloadProgress {
+  name: string;
+  pct: number;
+  downloaded_mb: number;
+  total_mb: number;
+}
+
+export interface DownloadComplete {
+  name: string;
+  path: string;
+}
+
+export interface PiperVoiceInfo {
+  id: string;
+  name: string;
+  language: string;
+  quality: string;
+  size: string;
+  downloaded: boolean;
+}
+
+export interface PiperStatus {
+  binary_installed: boolean;
+  dir: string;
+}
+
+export interface TtsOptions {
+  speed?: number;
+  expressiveness?: number;
+  sentencePause?: number;
+}
+
+export interface QueueStatus {
+  queued: number;
+  active: number;
+  completed: number;
+  sessions: SessionInfo[];
+}
+
+export interface SessionInfo {
+  session_id: string;
+  status: string;
+  completed_chunks: number;
+  total_chunks: number;
+  current_progress_pct: number;
+}
+
+import { t } from "./i18n";
+
+// Detect if we're running inside Tauri or in a plain browser (disabled for web build)
+const isTauri = false;
+
+// ─── Tauri backend (stubbed for web build) ───────────────────
+
+let invoke: (<T>(cmd: string, args?: Record<string, unknown>) => Promise<T>) | null = null;
+
+const invokeReady: Promise<void> = Promise.resolve();
+
+async function tauriInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  await invokeReady;
+  if (invoke) return invoke<T>(cmd, args);
+  return Promise.reject(new Error(`Tauri not available — "${cmd}" cannot be called`));
+}
+
+const tauriApi = {
+  getSettings: () => tauriInvoke<Settings>("get_settings"),
+  saveSettings: (settings: Settings) => tauriInvoke<void>("save_settings", { newSettings: settings }),
+  getAvailableModels: () => tauriInvoke<ModelInfo[]>("get_available_models"),
+  downloadModel: (modelName: string) => tauriInvoke<string>("download_model", { modelName }),
+  deleteModel: (modelName: string) => tauriInvoke<void>("delete_model", { modelName }),
+  loadModel: (modelPath: string) => tauriInvoke<void>("load_model", { modelPath }),
+  startRecording: (systemAudio?: boolean) =>
+    tauriInvoke<void>("start_recording", { systemAudio: systemAudio ?? false }),
+  stopRecording: () => tauriInvoke<TranscriptionResult>("stop_recording"),
+  getRecordingStatus: () => tauriInvoke<boolean>("get_recording_status"),
+  startDictation: () => tauriInvoke<string>("start_dictation"),
+  stopDictationSync: () => tauriInvoke<TranscriptionResult>("stop_dictation_sync"),
+  stopDictationAsync: (sessionId: string) => tauriInvoke<void>("stop_dictation", { sessionId }),
+  getDictationStatus: () => tauriInvoke<boolean>("get_dictation_status"),
+  getQueueStatus: () => tauriInvoke<QueueStatus>("get_queue_status"),
+  getCompletedSessions: () => tauriInvoke<Array<[string, number, string]>>("get_completed_sessions"),
+  pollChunkResults: () => tauriInvoke<Array<[string, number, string, number]>>("poll_chunk_results"),
+  initJobQueue: () => tauriInvoke<void>("init_job_queue"),
+  getDictionary: () => tauriInvoke<Dictionary>("get_dictionary"),
+  saveDictionary: (dict: Dictionary) => tauriInvoke<void>("save_dictionary", { dict }),
+  addDictionaryWord: (word: string, replacement: string | null) =>
+    tauriInvoke<void>("add_dictionary_word", { word, replacement }),
+  removeDictionaryWord: (word: string) => tauriInvoke<void>("remove_dictionary_word", { word }),
+  getAudioDevices: () => tauriInvoke<string[]>("get_audio_devices"),
+  getOutputDevices: () => tauriInvoke<string[]>("get_output_devices"),
+  getAudioLevel: () => tauriInvoke<number>("get_audio_level"),
+  getSystemAudioStatus: () => tauriInvoke<SystemAudioStatus>("get_system_audio_status"),
+  isModelLoaded: () => tauriInvoke<boolean>("is_model_loaded"),
+  getGpuInfo: () => tauriInvoke<{ available: boolean; name: string; vram_mb: number; driver: string; recommendation: string }>("get_gpu_info"),
+  getGpuStatus: () => tauriInvoke<{ enabled: boolean; cuda_available: boolean; active: boolean; device_name: string }>("get_gpu_status"),
+  typeText: (text: string, autoEnter?: boolean) => tauriInvoke<void>("type_text", { text, autoEnter: autoEnter ?? false }),
+  updateTrayLanguage: (language: string) => tauriInvoke<void>("update_tray_language", { language }),
+  startFileJob: (jobId: string, filePath: string) =>
+    tauriInvoke<void>("start_file_job", { jobId, filePath }),
+  cancelFileJob: (jobId: string) =>
+    tauriInvoke<void>("cancel_file_job", { jobId }),
+  stopDictationRaw: () =>
+    tauriInvoke<number[]>("stop_dictation_raw"),
+  trainSpeaker: (name: string, audio: number[]) =>
+    tauriInvoke<void>("train_speaker", { name, audio }),
+  listSpeakerProfiles: () =>
+    tauriInvoke<string[]>("list_speaker_profiles"),
+  deleteSpeakerProfile: (name: string) =>
+    tauriInvoke<void>("delete_speaker_profile", { name }),
+  ttsSpeak: (text: string, voice?: string, options?: TtsOptions) =>
+    tauriInvoke<number[]>("tts_speak", { text, voice: voice ?? null, options: options ?? null }),
+  ttsGetVoices: () =>
+    tauriInvoke<PiperVoiceInfo[]>("tts_get_voices"),
+  ttsDownloadVoice: (voiceId: string) =>
+    tauriInvoke<void>("tts_download_voice", { voiceId }),
+  ttsDeleteVoice: (voiceId: string) =>
+    tauriInvoke<void>("tts_delete_voice", { voiceId }),
+  ttsStatus: () =>
+    tauriInvoke<PiperStatus>("tts_status"),
+  getRunningProcesses: () =>
+    tauriInvoke<ProcessInfo[]>("get_running_processes"),
+  killProcess: (pid: number) =>
+    tauriInvoke<void>("kill_process", { pid }),
+};
+
+// ─── Local server detection ──────────────────────────────────
+
+// Op localhost (dev) praat de web-build met de lokale server op :3333; wordt de
+// build vanaf een echt domein geserveerd (bv. speech.<domein> in de cloud), dan
+// is de transcriptieserver same-origin achter /api/* (reverse proxy).
+const IS_LOCAL_PAGE =
+  typeof location !== "undefined" && ["localhost", "127.0.0.1"].includes(location.hostname);
+const SERVER_URL = IS_LOCAL_PAGE ? "http://localhost:3333" : "";
+let serverAvailable: boolean | null = null; // null = not checked yet
+
+async function checkServer(): Promise<boolean> {
+  if (serverAvailable !== null) return serverAvailable;
+  try {
+    const res = await fetch(`${SERVER_URL}/api/status`, { signal: AbortSignal.timeout(1500) });
+    const data = await res.json();
+    serverAvailable = data.status === "ok";
+  } catch {
+    serverAvailable = false;
+  }
+  // Re-check every 30 seconds
+  setTimeout(() => { serverAvailable = null; }, 30000);
+  return serverAvailable;
+}
+
+export function isServerMode(): boolean {
+  return serverAvailable === true;
+}
+
+// ─── Browser backend (local server → Web Speech API fallback) ─
+
+const SETTINGS_KEY = "oss_settings";
+const DICT_KEY = "oss_dictionary";
+
+function loadLocalSettings(): Settings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (_) {}
+  return {
+    language: "nl",
+    ui_language: "en",
+    model_name: "base",
+    model_path: "",
+    use_gpu: false,
+    hotkey: "Ctrl+Super",
+    hotkey_mode: "hold",
+    auto_paste: true,
+    audio_device: "default",
+    system_audio_device: "default",
+    theme: "dark",
+    file_auto_save: false,
+    file_save_directory: "",
+    file_confirm_actions: true,
+    audio_feedback: true,
+  };
+}
+
+function saveLocalSettings(s: Settings) {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+}
+
+function loadLocalDictionary(): Dictionary {
+  try {
+    const raw = localStorage.getItem(DICT_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (_) {}
+  return { words: {} };
+}
+
+function saveLocalDictionary(d: Dictionary) {
+  localStorage.setItem(DICT_KEY, JSON.stringify(d));
+}
+
+let currentSettings = loadLocalSettings();
+let currentDict = loadLocalDictionary();
+
+// Audio capture state
+let micStream: MediaStream | null = null;
+let micAnalyser: AnalyserNode | null = null;
+let micAudioCtx: AudioContext | null = null;
+let pcmBuffers: Float32Array[] = [];
+let scriptNode: ScriptProcessorNode | null = null;
+let isServerRecording = false;
+
+// Web Speech API state (fallback)
+let recognition: any = null;
+let recognizedText = "";
+let recordingStartTime = 0;
+
+export function getMicAnalyser(): AnalyserNode | null {
+  return micAnalyser;
+}
+
+export function isBrowserMode(): boolean {
+  return !isTauri;
+}
+
+function applyDictionary(text: string): string {
+  let result = text;
+  for (const [word, replacement] of Object.entries(currentDict.words)) {
+    if (replacement) {
+      const regex = new RegExp(`\\b${word}\\b`, "gi");
+      result = result.replace(regex, replacement);
+    }
+  }
+  return result;
+}
+
+function getSpeechLang(lang: string): string {
+  const map: Record<string, string> = {
+    auto: "", nl: "nl-NL", en: "en-US", de: "de-DE", fr: "fr-FR",
+    es: "es-ES", it: "it-IT", pt: "pt-PT", pl: "pl-PL", ja: "ja-JP", zh: "zh-CN",
+  };
+  return map[lang] || "";
+}
+
+// ─── Start mic + analyser (shared for both modes) ────────────
+
+async function startMic() {
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  micAudioCtx = new AudioContext();
+  const source = micAudioCtx.createMediaStreamSource(micStream);
+  micAnalyser = micAudioCtx.createAnalyser();
+  micAnalyser.fftSize = 256;
+  source.connect(micAnalyser);
+}
+
+function stopMic() {
+  if (micStream) {
+    micStream.getTracks().forEach((t) => t.stop());
+    micStream = null;
+  }
+  if (micAudioCtx) {
+    micAudioCtx.close();
+    micAudioCtx = null;
+  }
+  micAnalyser = null;
+}
+
+// ─── Server-based recording (local Whisper) ──────────────────
+
+async function startServerRecording() {
+  await startMic();
+  pcmBuffers = [];
+  isServerRecording = true;
+  recordingStartTime = Date.now();
+
+  // Capture raw PCM directly via ScriptProcessorNode (no MediaRecorder/webm needed)
+  scriptNode = micAudioCtx!.createScriptProcessor(4096, 1, 1);
+  const source = micAudioCtx!.createMediaStreamSource(micStream!);
+  scriptNode.onaudioprocess = (e) => {
+    if (!isServerRecording) return;
+    const input = e.inputBuffer.getChannelData(0);
+    pcmBuffers.push(new Float32Array(input));
+  };
+  source.connect(scriptNode);
+  scriptNode.connect(micAudioCtx!.destination);
+}
+
+async function stopServerRecording(): Promise<TranscriptionResult> {
+  const durationMs = Date.now() - recordingStartTime;
+  isServerRecording = false;
+
+  // Disconnect script node
+  if (scriptNode) {
+    scriptNode.disconnect();
+    scriptNode = null;
+  }
+
+  // Merge all PCM buffers
+  const totalLength = pcmBuffers.reduce((sum, buf) => sum + buf.length, 0);
+  const merged = new Float32Array(totalLength);
+  let offset = 0;
+  for (const buf of pcmBuffers) {
+    merged.set(buf, offset);
+    offset += buf.length;
+  }
+  pcmBuffers = [];
+
+  // Resample from micAudioCtx.sampleRate to 16kHz
+  const srcRate = micAudioCtx?.sampleRate || 48000;
+  const targetRate = 16000;
+  const ratio = srcRate / targetRate;
+  const resampledLength = Math.floor(merged.length / ratio);
+  const pcm16 = new Int16Array(resampledLength);
+  for (let i = 0; i < resampledLength; i++) {
+    const srcIdx = Math.floor(i * ratio);
+    const s = Math.max(-1, Math.min(1, merged[srcIdx]));
+    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+
+  // Build WAV file
+  const wavBuffer = createWavBuffer(pcm16, targetRate);
+
+  stopMic();
+
+  // Send to local server
+  const res = await fetch(`${SERVER_URL}/api/transcribe?lang=${currentSettings.language}`, {
+    method: "POST",
+    headers: { "Content-Type": "audio/wav" },
+    body: wavBuffer,
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || t("api.transcriptionFailed"));
+  }
+
+  const result = await res.json();
+  let text = (result.text || "").trim();
+  text = applyDictionary(text);
+
+  return { text, language: result.language || "auto", duration_ms: durationMs };
+}
+
+function createWavBuffer(pcm16: Int16Array, sampleRate: number): ArrayBuffer {
+  const dataLen = pcm16.length * 2;
+  const buffer = new ArrayBuffer(44 + dataLen);
+  const view = new DataView(buffer);
+
+  // RIFF header
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, 36 + dataLen, true);
+  writeString(view, 8, "WAVE");
+  // fmt chunk
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  // data chunk
+  writeString(view, 36, "data");
+  view.setUint32(40, dataLen, true);
+
+  const output = new Int16Array(buffer, 44);
+  output.set(pcm16);
+
+  return buffer;
+}
+
+function writeString(view: DataView, offset: number, str: string) {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
+  }
+}
+
+// ─── Web Speech API recording (fallback) ─────────────────────
+
+async function startWebSpeechRecording() {
+  await startMic();
+
+  const SpeechRecognition =
+    (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+  if (!SpeechRecognition) {
+    throw new Error(t("api.speechRecognitionUnavailable"));
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    recognizedText = "";
+    recordingStartTime = Date.now();
+
+    recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    const lang = getSpeechLang(currentSettings.language);
+    if (lang) recognition.lang = lang;
+
+    recognition.onresult = (event: any) => {
+      let final = "";
+      let interim = "";
+      for (let i = 0; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.isFinal) {
+          final += result[0].transcript;
+        } else {
+          interim += result[0].transcript;
+        }
+      }
+      recognizedText = final || interim;
+    };
+
+    recognition.onerror = (event: any) => {
+      if (event.error === "not-allowed") {
+        reject(new Error(t("api.microphoneAccessDenied")));
+      }
+    };
+
+    recognition.onstart = () => resolve();
+
+    try {
+      recognition.start();
+    } catch (e) {
+      reject(new Error(t("api.speechRecognitionStartFailed", { error: String(e) })));
+    }
+  });
+}
+
+async function stopWebSpeechRecording(): Promise<TranscriptionResult> {
+  const durationMs = Date.now() - recordingStartTime;
+
+  if (recognition) {
+    recognition.stop();
+    await new Promise((r) => setTimeout(r, 300));
+    recognition = null;
+  }
+
+  stopMic();
+
+  let text = recognizedText.trim();
+  text = applyDictionary(text);
+
+  return { text, language: currentSettings.language || "auto", duration_ms: durationMs };
+}
+
+// ─── Browser API (auto-detects local server) ─────────────────
+
+const browserApi = {
+  getSettings: () => Promise.resolve({ ...currentSettings }),
+
+  saveSettings: (settings: Settings) => {
+    currentSettings = { ...settings };
+    saveLocalSettings(settings);
+    return Promise.resolve();
+  },
+
+  getAvailableModels: async (): Promise<ModelInfo[]> => {
+    if (await checkServer()) {
+      try {
+        const res = await fetch(`${SERVER_URL}/api/models`);
+        const data = await res.json();
+        return data.models.map((m: any) => ({
+          name: m.name,
+          size: m.size,
+          downloaded: m.downloaded,
+          path: m.path,
+        }));
+      } catch (_) {}
+    }
+    // Fallback: show static list
+    return [
+      { name: "tiny", size: "~75 MB", downloaded: false, path: null },
+      { name: "base", size: "~142 MB", downloaded: false, path: null },
+      { name: "small", size: "~466 MB", downloaded: false, path: null },
+      { name: "large-v3-turbo-q5_0", size: "~574 MB", downloaded: false, path: null },
+      { name: "large-v3-turbo-q8_0", size: "~874 MB", downloaded: false, path: null },
+      { name: "medium", size: "~1.5 GB", downloaded: false, path: null },
+      { name: "large-v3-turbo", size: "~1.6 GB", downloaded: false, path: null },
+      { name: "large-v3", size: "~3.1 GB", downloaded: false, path: null },
+    ];
+  },
+
+  downloadModel: async (modelName: string) => {
+    // Met een (cloud)server downloadt de server het ggml-model server-side.
+    if (await checkServer()) {
+      const res = await fetch(`${SERVER_URL}/api/download-model`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: modelName }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}) as { error?: string });
+        throw new Error(err.error || "Model download failed");
+      }
+      const data = await res.json();
+      return data.path as string;
+    }
+    throw new Error("Model download is not available in browser mode. Place .bin files manually in the models/ folder.");
+  },
+
+  deleteModel: async (modelName: string) => {
+    if (await checkServer()) {
+      const res = await fetch(`${SERVER_URL}/api/delete-model`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: modelName }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}) as { error?: string });
+        throw new Error(err.error || "Model deletion failed");
+      }
+      return;
+    }
+    throw new Error("Model deletion is not available in browser mode.");
+  },
+
+  loadModel: async (modelPath: string) => {
+    if (await checkServer()) {
+      const name = modelPath.replace(/^.*ggml-/, "").replace(/\.bin$/, "");
+      const res = await fetch(`${SERVER_URL}/api/load-model`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: name }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error);
+      }
+      currentSettings.model_name = name;
+      currentSettings.model_path = modelPath;
+      saveLocalSettings(currentSettings);
+    }
+  },
+
+  startRecording: async (_systemAudio?: boolean) => {
+    try {
+      if (await checkServer()) {
+        return startServerRecording();
+      }
+    } catch (_) {
+      // Server failed, fall through to Web Speech
+    }
+    return startWebSpeechRecording();
+  },
+
+  stopRecording: async (): Promise<TranscriptionResult> => {
+    if (isServerRecording) {
+      return stopServerRecording();
+    }
+    return stopWebSpeechRecording();
+  },
+
+  getRecordingStatus: () => Promise.resolve(recognition !== null || isServerRecording),
+  startDictation: async (): Promise<string> => {
+    await browserApi.startRecording();
+    return `browser-${Date.now()}`;
+  },
+  stopDictationSync: async () => browserApi.stopRecording(),
+  stopDictationAsync: async (_sessionId: string) => {
+    // In browser mode, stopDictationSync is used instead (sync path)
+  },
+  getDictationStatus: () => Promise.resolve(false),
+  getQueueStatus: (): Promise<QueueStatus> => Promise.resolve({ queued: 0, active: 0, completed: 0, sessions: [] }),
+  getCompletedSessions: (): Promise<Array<[string, number, string]>> => Promise.resolve([]),
+  pollChunkResults: (): Promise<Array<[string, number, string, number]>> => Promise.resolve([]),
+  initJobQueue: () => Promise.resolve(),
+
+  getDictionary: () => Promise.resolve({ ...currentDict }),
+
+  saveDictionary: (dict: Dictionary) => {
+    currentDict = { ...dict };
+    saveLocalDictionary(dict);
+    return Promise.resolve();
+  },
+
+  addDictionaryWord: (word: string, replacement: string | null) => {
+    currentDict.words[word] = replacement;
+    saveLocalDictionary(currentDict);
+    return Promise.resolve();
+  },
+
+  removeDictionaryWord: (word: string) => {
+    delete currentDict.words[word];
+    saveLocalDictionary(currentDict);
+    return Promise.resolve();
+  },
+
+  getAudioLevel: () => Promise.resolve(0),
+
+  getSystemAudioStatus: (): Promise<SystemAudioStatus> =>
+    Promise.resolve({ active: false, level: 0, last_packet_ms_ago: null }),
+
+  getOutputDevices: () => Promise.resolve([] as string[]),
+
+  getAudioDevices: async () => {
+    try {
+      const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      tempStream.getTracks().forEach((t) => t.stop());
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices
+        .filter((d) => d.kind === "audioinput")
+        .map((d) => d.label || t("api.microphoneDevice", { id: d.deviceId.slice(0, 8) }));
+    } catch {
+      return [t("api.defaultMicrophone")];
+    }
+  },
+
+  isModelLoaded: async () => {
+    if (await checkServer()) {
+      try {
+        const res = await fetch(`${SERVER_URL}/api/status`);
+        const data = await res.json();
+        return data.modelLoaded === true;
+      } catch (_) {}
+    }
+    // Fallback: check Web Speech API
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    return !!SR;
+  },
+
+  typeText: (_text: string, _autoEnter?: boolean) => Promise.resolve(),
+  updateTrayLanguage: (_language: string) => Promise.resolve(),
+  getGpuInfo: () => Promise.resolve({ available: false, name: "Not available in browser mode", vram_mb: 0, driver: "", recommendation: "GPU detection requires the desktop app" }),
+  getGpuStatus: () => Promise.resolve({ enabled: false, cuda_available: false, active: false, device_name: "" }),
+  startFileJob: (_jobId: string, _filePath: string) =>
+    Promise.reject(new Error("File transcription is not available in browser mode.")),
+  cancelFileJob: (_jobId: string) =>
+    Promise.reject(new Error("File transcription is not available in browser mode.")),
+  stopDictationRaw: (): Promise<number[]> => Promise.resolve([]),
+  trainSpeaker: (_name: string, _audio: number[]) => Promise.resolve(),
+  listSpeakerProfiles: (): Promise<string[]> => Promise.resolve([]),
+  deleteSpeakerProfile: (_name: string) => Promise.resolve(),
+  ttsSpeak: (_text: string, _voice?: string, _options?: TtsOptions): Promise<number[]> =>
+    Promise.reject(new Error("TTS is not available in browser mode.")),
+  ttsGetVoices: (): Promise<PiperVoiceInfo[]> => Promise.resolve([]),
+  ttsDownloadVoice: (_voiceId: string): Promise<void> => Promise.reject(new Error("Not available in browser mode.")),
+  ttsDeleteVoice: (_voiceId: string): Promise<void> => Promise.reject(new Error("Not available in browser mode.")),
+  ttsStatus: (): Promise<PiperStatus> => Promise.resolve({ binary_installed: false, dir: "" }),
+  getRunningProcesses: (): Promise<ProcessInfo[]> => Promise.resolve([]),
+  killProcess: (_pid: number): Promise<void> => Promise.resolve(),
+};
+
+export const api = isTauri ? tauriApi : browserApi;
+
+// ─── Auth ────────────────────────────────────────────────────
+
+export interface UserProfile {
+  sub: string;
+  email?: string;
+  name?: string;
+  picture?: string;
+}
+
+export type SubscriptionTier = "free" | "pro" | "studio";
+export type SubscriptionStatus =
+  | "active"
+  | "canceled"
+  | "past_due"
+  | "unpaid"
+  | "trialing"
+  | "incomplete";
+
+export interface Subscription {
+  tier?: SubscriptionTier;
+  status?: SubscriptionStatus;
+}
+
+export interface Credits {
+  total: number;
+  monthly: number;
+  topup: number;
+  resets_at?: string | null;
+}
+
+export interface UserInfo {
+  sub: string;
+  email?: string | null;
+  email_verified?: boolean | null;
+  name?: string | null;
+  picture?: string | null;
+  subscription?: Subscription | null;
+  credits?: Credits | null;
+}
+
+export const auth = {
+  isConfigured: () => tauriInvoke<boolean>("auth_is_configured"),
+  login: () => tauriInvoke<UserProfile>("auth_login"),
+  logout: () => tauriInvoke<void>("auth_logout"),
+  currentUser: () => tauriInvoke<UserProfile | null>("auth_current_user"),
+  userInfo: () => tauriInvoke<UserInfo>("auth_userinfo"),
+};
+
+// ─── App config (service discovery) ─────────────────────────
+
+export interface AiServer {
+  url: string;
+}
+
+export interface AppConfig {
+  client_id?: string | null;
+  ai_servers: AiServer[];
+  operations: unknown;
+}
+
+export const appConfig = {
+  get: () => tauriInvoke<AppConfig>("get_app_config"),
+  invalidate: () => tauriInvoke<void>("invalidate_app_config"),
+};
