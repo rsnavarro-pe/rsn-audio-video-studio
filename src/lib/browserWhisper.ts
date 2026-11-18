@@ -126,6 +126,30 @@ async function decodeFileTo16kHzMono(file: File): Promise<{ pcm: Float32Array; d
   }
 }
 
+export async function transcribeBrowserPcm(
+  pcm: Float32Array,
+  durationMs: number,
+  modelName?: string,
+  onProgress?: (pct: number) => void,
+  jobId?: string
+): Promise<{ text: string; language: string; duration_ms: number }> {
+  const id = jobId || `mic_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const modelId = resolveModelId(modelName);
+  const copy = new Float32Array(pcm);
+
+  const w = getWorker();
+  const text = await new Promise<string>((resolve, reject) => {
+    pending.set(id, { resolve, reject, onProgress });
+    w.postMessage({ type: "transcribe", id, modelId, pcm: copy }, [copy.buffer]);
+  });
+
+  return {
+    text,
+    language: "en",
+    duration_ms: durationMs,
+  };
+}
+
 export async function transcribeBrowserFile(
   file: File,
   modelName?: string,

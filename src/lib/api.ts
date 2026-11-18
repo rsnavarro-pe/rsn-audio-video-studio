@@ -115,7 +115,7 @@ export interface SessionInfo {
 }
 
 import { t } from "./i18n";
-import { loadBrowserWhisper, isBrowserModelReady } from "./browserWhisper";
+import { loadBrowserWhisper, isBrowserModelReady, transcribeBrowserPcm } from "./browserWhisper";
 
 // Detect if we're running inside Tauri or in a plain browser (disabled for web build)
 const isTauri = false;
@@ -512,6 +512,64 @@ async function stopWebSpeechRecording(): Promise<TranscriptionResult> {
   return { text, language: currentSettings.language || "auto", duration_ms: durationMs };
 }
 
+// ─── Browser Whisper recording (offline Web Worker) ──────────
+
+let isBrowserWhisperRecording = false;
+
+async function startBrowserWhisperRecording() {
+  await startMic();
+  pcmBuffers = [];
+  isBrowserWhisperRecording = true;
+  recordingStartTime = Date.now();
+
+  scriptNode = micAudioCtx!.createScriptProcessor(4096, 1, 1);
+  const source = micAudioCtx!.createMediaStreamSource(micStream!);
+  scriptNode.onaudioprocess = (e) => {
+    if (!isBrowserWhisperRecording) return;
+    pcmBuffers.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  };
+  source.connect(scriptNode);
+  scriptNode.connect(micAudioCtx!.destination);
+}
+
+async function stopBrowserWhisperRecording(): Promise<TranscriptionResult> {
+  const durationMs = Date.now() - recordingStartTime;
+  isBrowserWhisperRecording = false;
+
+  if (scriptNode) {
+    scriptNode.disconnect();
+    scriptNode = null;
+  }
+
+  const totalLength = pcmBuffers.reduce((sum, buf) => sum + buf.length, 0);
+  const merged = new Float32Array(totalLength);
+  let offset = 0;
+  for (const buf of pcmBuffers) {
+    merged.set(buf, offset);
+    offset += buf.length;
+  }
+  pcmBuffers = [];
+
+  const srcRate = micAudioCtx?.sampleRate || 48000;
+  const targetRate = 16000;
+  const ratio = srcRate / targetRate;
+  const resampledLength = Math.floor(merged.length / ratio);
+  const resampled = new Float32Array(resampledLength);
+  for (let i = 0; i < resampledLength; i++) {
+    resampled[i] = merged[Math.floor(i * ratio)];
+  }
+
+  stopMic();
+
+  const result = await transcribeBrowserPcm(
+    resampled,
+    durationMs,
+    currentSettings.model_name || "tiny.en"
+  );
+  const text = applyDictionary(result.text.trim());
+  return { text, language: "en", duration_ms: durationMs };
+}
+
 // ─── Browser API (auto-detects local server) ─────────────────
 
 const browserApi = {
@@ -607,19 +665,19 @@ const browserApi = {
         return startServerRecording();
       }
     } catch (_) {
-      // Server failed, fall through to Web Speech
+      // Server unavailable, use local browser Whisper Web Worker
     }
-    return startWebSpeechRecording();
+    return startBrowserWhisperRecording();
   },
 
   stopRecording: async (): Promise<TranscriptionResult> => {
     if (isServerRecording) {
       return stopServerRecording();
     }
-    return stopWebSpeechRecording();
+    return stopBrowserWhisperRecording();
   },
 
-  getRecordingStatus: () => Promise.resolve(recognition !== null || isServerRecording),
+  getRecordingStatus: () => Promise.resolve(isBrowserWhisperRecording || isServerRecording),
   startDictation: async (): Promise<string> => {
     await browserApi.startRecording();
     return `browser-${Date.now()}`;
