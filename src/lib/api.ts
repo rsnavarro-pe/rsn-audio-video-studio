@@ -226,16 +226,28 @@ export function isServerMode(): boolean {
 const SETTINGS_KEY = "oss_settings";
 const DICT_KEY = "oss_dictionary";
 
+const BROWSER_MODEL_NAMES = new Set(["tiny.en", "base.en", "distil-small.en"]);
+
 function loadLocalSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Settings;
+      if (!BROWSER_MODEL_NAMES.has(parsed.model_name)) {
+        parsed.model_name = "tiny.en";
+        parsed.model_path = "Xenova/whisper-tiny.en";
+      }
+      if (!parsed.language || parsed.language === "nl") {
+        parsed.language = "en";
+      }
+      return parsed;
+    }
   } catch (_) {}
   return {
-    language: "nl",
+    language: "en",
     ui_language: "en",
-    model_name: "base",
-    model_path: "",
+    model_name: "tiny.en",
+    model_path: "Xenova/whisper-tiny.en",
     use_gpu: false,
     hotkey: "Ctrl+Super",
     hotkey_mode: "hold",
