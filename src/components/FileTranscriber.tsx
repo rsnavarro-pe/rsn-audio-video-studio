@@ -1,7 +1,7 @@
 import { createSignal, onMount, onCleanup, Show, For } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { api, type TranscriptionResult, type ModelInfo } from "../lib/api";
-import { transcribeBrowserFile } from "../lib/browserWhisper";
+import { transcribeBrowserFile, cancelBrowserJob } from "../lib/browserWhisper";
 import { useI18n } from "../lib/i18n";
 
 const isTauri = !!(window as any).__TAURI_INTERNALS__;
@@ -164,7 +164,8 @@ export default function FileTranscriber() {
             const j = draft.find((item) => item.id === jobId);
             if (j && j.status === "transcribing") j.progress = pct;
           }));
-        }
+        },
+        jobId
       );
 
       setJobs(produce((draft) => {
@@ -220,6 +221,10 @@ export default function FileTranscriber() {
         }
       })
     );
+    if (!isTauri) {
+      cancelBrowserJob(jobId);
+      return;
+    }
     try {
       await api.cancelFileJob(jobId);
     } catch (_) {}
