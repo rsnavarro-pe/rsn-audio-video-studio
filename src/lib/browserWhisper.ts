@@ -1,7 +1,8 @@
 export const BROWSER_WHISPER_MODELS: Record<string, { id: string; size: string }> = {
-  "tiny.en": { id: "Xenova/whisper-tiny.en", size: "~40 MB" },
-  "base.en": { id: "Xenova/whisper-base.en", size: "~75 MB" },
+  "tiny.en": { id: "onnx-community/whisper-tiny.en", size: "~40 MB" },
+  "base.en": { id: "onnx-community/whisper-base.en", size: "~75 MB" },
   "distil-small.en": { id: "distil-whisper/distil-small.en", size: "~165 MB" },
+  "small": { id: "onnx-community/whisper-small", size: "~250 MB" },
 };
 
 const DEFAULT_MODEL = "tiny.en";
@@ -114,6 +115,9 @@ async function decodeFileTo16kHzMono(file: File): Promise<{ pcm: Float32Array; d
     const decoded = await audioCtx.decodeAudioData(arrayBuffer);
     const durationMs = Math.round(decoded.duration * 1000);
     const targetRate = 16000;
+    if (decoded.sampleRate === targetRate && decoded.numberOfChannels === 1) {
+      return { pcm: new Float32Array(decoded.getChannelData(0)), durationMs };
+    }
     const targetLength = Math.max(1, Math.ceil(decoded.duration * targetRate));
     const offline = new OfflineAudioContext(1, targetLength, targetRate);
     const source = offline.createBufferSource();

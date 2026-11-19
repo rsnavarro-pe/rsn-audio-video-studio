@@ -2,6 +2,10 @@ import { pipeline, env } from "@huggingface/transformers";
 
 env.allowLocalModels = false;
 
+const SAMPLE_RATE = 16000;
+const CHUNK_SEC = 30;
+const CHUNK_SAMPLES = SAMPLE_RATE * CHUNK_SEC;
+
 type AsrPipeline = (
   audio: Float32Array,
   options?: Record<string, unknown>
@@ -28,6 +32,42 @@ async function detectDevice(): Promise<"webgpu" | "wasm"> {
   return "wasm";
 }
 
+async function createPipelineWithDtype(
+  modelId: string,
+  device: "webgpu" | "wasm",
+  requestId: string
+): Promise<AsrPipeline> {
+  const progress_callback = (info: { status?: string; progress?: number }) => {
+    if (info.status === "progress" && typeof info.progress === "number") {
+      self.postMessage({
+        type: "progress",
+        id: requestId,
+        pct: Math.min(95, Math.round(info.progress * 0.5)),
+      });
+    }
+  };
+
+  if (device === "webgpu") {
+    try {
+      const pipe = await pipeline("automatic-speech-recognition", modelId, {
+        device: "webgpu",
+        dtype: { encoder_model: "fp32", decoder_model_merged: "q4" },
+        progress_callback,
+      });
+      return pipe as unknown as AsrPipeline;
+    } catch {
+      // Fallback to q8 if q4 weights are unavailable for this repo
+    }
+  }
+
+  const pipe = await pipeline("automatic-speech-recognition", modelId, {
+    device,
+    dtype: "q8",
+    progress_callback,
+  });
+  return pipe as unknown as AsrPipeline;
+}
+
 async function getPipeline(modelId: string, requestId: string): Promise<AsrPipeline> {
   if (cachedPipeline && cachedModelId === modelId) {
     return cachedPipeline;
@@ -36,20 +76,7 @@ async function getPipeline(modelId: string, requestId: string): Promise<AsrPipel
   cachedModelId = modelId;
   cachedPipeline = (async () => {
     const device = await detectDevice();
-    const pipe = await pipeline("automatic-speech-recognition", modelId, {
-      device,
-      dtype: "q8",
-      progress_callback: (info: { status?: string; progress?: number }) => {
-        if (info.status === "progress" && typeof info.progress === "number") {
-          self.postMessage({
-            type: "progress",
-            id: requestId,
-            pct: Math.min(95, Math.round(info.progress * 0.6)),
-          });
-        }
-      },
-    });
-    return pipe as unknown as AsrPipeline;
+    return createPipelineWithDtype(modelId, device, requestId);
   })();
 
   try {
@@ -72,19 +99,35 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
 
     if (msg.type === "transcribe") {
       const transcriber = await getPipeline(msg.modelId, msg.id);
-      self.postMessage({ type: "progress", id: msg.id, pct: 75 });
+      const audio = msg.pcm;
+      const totalChunks = Math.max(1, Math.ceil(audio.length / CHUNK_SAMPLES));
+      const textParts: string[] = [];
 
-      const output = await transcriber(msg.pcm, {
-        chunk_length_s: 30,
-        stride_length_s: 5,
-        return_timestamps: true,
-      });
+      const options: Record<string, unknown> = { return_timestamps: true };
+      if (!msg.modelId.endsWith(".en")) {
+        options.language = "en";
+        options.task = "transcribe";
+      }
 
-      const text = Array.isArray(output)
-        ? output.map((item) => item.text || "").join(" ").trim()
-        : (output.text || "").trim();
+      self.postMessage({ type: "progress", id: msg.id, pct: 55 });
 
-      self.postMessage({ type: "result", id: msg.id, text });
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SAMPLES;
+        const end = Math.min(audio.length, start + CHUNK_SAMPLES);
+        const slice = audio.subarray(start, end);
+
+        const output = await transcriber(slice, options);
+        const chunkText = Array.isArray(output)
+          ? output.map((item) => item.text || "").join(" ").trim()
+          : (output.text || "").trim();
+
+        if (chunkText) textParts.push(chunkText);
+
+        const pct = 55 + Math.round(((i + 1) / totalChunks) * 45);
+        self.postMessage({ type: "progress", id: msg.id, pct: Math.min(99, pct) });
+      }
+
+      self.postMessage({ type: "result", id: msg.id, text: textParts.join(" ").trim() });
     }
   } catch (err) {
     self.postMessage({

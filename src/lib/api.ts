@@ -226,7 +226,7 @@ export function isServerMode(): boolean {
 const SETTINGS_KEY = "oss_settings";
 const DICT_KEY = "oss_dictionary";
 
-const BROWSER_MODEL_NAMES = new Set(["tiny.en", "base.en", "distil-small.en"]);
+const BROWSER_MODEL_NAMES = new Set(["tiny.en", "base.en", "distil-small.en", "small"]);
 
 function loadLocalSettings(): Settings {
   try {
@@ -235,7 +235,7 @@ function loadLocalSettings(): Settings {
       const parsed = JSON.parse(raw) as Settings;
       if (!BROWSER_MODEL_NAMES.has(parsed.model_name)) {
         parsed.model_name = "tiny.en";
-        parsed.model_path = "Xenova/whisper-tiny.en";
+        parsed.model_path = "onnx-community/whisper-tiny.en";
       }
       if (!parsed.language || parsed.language === "nl") {
         parsed.language = "en";
@@ -247,7 +247,7 @@ function loadLocalSettings(): Settings {
     language: "en",
     ui_language: "en",
     model_name: "tiny.en",
-    model_path: "Xenova/whisper-tiny.en",
+    model_path: "onnx-community/whisper-tiny.en",
     use_gpu: false,
     hotkey: "Ctrl+Super",
     hotkey_mode: "hold",
@@ -606,11 +606,12 @@ const browserApi = {
         }));
       } catch (_) {}
     }
-    // Browser mode: Hugging Face Transformers.js English models
+    // Browser mode: Hugging Face Transformers.js models
     return [
-      { name: "tiny.en", size: "~40 MB", downloaded: true, path: "Xenova/whisper-tiny.en" },
-      { name: "base.en", size: "~75 MB", downloaded: true, path: "Xenova/whisper-base.en" },
+      { name: "tiny.en", size: "~40 MB", downloaded: true, path: "onnx-community/whisper-tiny.en" },
+      { name: "base.en", size: "~75 MB", downloaded: true, path: "onnx-community/whisper-base.en" },
       { name: "distil-small.en", size: "~165 MB", downloaded: true, path: "distil-whisper/distil-small.en" },
+      { name: "small", size: "~250 MB", downloaded: true, path: "onnx-community/whisper-small" },
     ];
   },
 
@@ -667,6 +668,8 @@ const browserApi = {
     }
     const name = modelPath.includes("distil-small.en")
       ? "distil-small.en"
+      : modelPath.includes("whisper-small")
+      ? "small"
       : modelPath.includes("base.en")
       ? "base.en"
       : "tiny.en";
