@@ -41,6 +41,88 @@ function esc(str: unknown): string {
     .replace(/"/g, "&quot;");
 }
 
+export interface StructuredParagraph {
+  startSec: number | null;
+  text: string;
+}
+
+function getParagraphLimits(durationSec: number) {
+  if (durationSec > 1800) {
+    return { maxSentences: 5, maxWords: 135, minWordsForPause: 30, pauseSec: 1.8 };
+  }
+  if (durationSec >= 300) {
+    return { maxSentences: 4, maxWords: 105, minWordsForPause: 25, pauseSec: 1.8 };
+  }
+  return { maxSentences: 3, maxWords: 75, minWordsForPause: 20, pauseSec: 1.8 };
+}
+
+export function groupSegmentsIntoParagraphs(
+  segments: TranscriptSegment[],
+  fullText: string,
+  durationSec: number
+): StructuredParagraph[] {
+  const { maxSentences, maxWords, minWordsForPause, pauseSec } = getParagraphLimits(durationSec);
+
+  if (!segments || segments.length === 0) {
+    const sentences = (fullText || "").trim().split(/(?<=[.!?])\s+/).filter(Boolean);
+    if (sentences.length === 0) return [];
+    const paras: StructuredParagraph[] = [];
+    let buf: string[] = [];
+    let words = 0;
+    for (const s of sentences) {
+      buf.push(s);
+      words += s.split(/\s+/).length;
+      if (buf.length >= maxSentences || words >= maxWords) {
+        paras.push({ startSec: null, text: buf.join(" ") });
+        buf = [];
+        words = 0;
+      }
+    }
+    if (buf.length > 0) paras.push({ startSec: null, text: buf.join(" ") });
+    return paras;
+  }
+
+  const paras: StructuredParagraph[] = [];
+  let texts: string[] = [];
+  let words = 0;
+  let sentences = 0;
+  let paraStart: number | null = null;
+  let lastEnd: number | null = null;
+
+  const flush = () => {
+    if (texts.length === 0) return;
+    paras.push({ startSec: paraStart, text: texts.join(" ").replace(/\s+/g, " ").trim() });
+    texts = [];
+    words = 0;
+    sentences = 0;
+    paraStart = null;
+  };
+
+  for (const seg of segments) {
+    const segText = (seg.text || "").trim();
+    if (!segText) continue;
+    const t0 = seg.timestamp?.[0] ?? 0;
+    const t1 = seg.timestamp?.[1] ?? t0;
+
+    if (texts.length > 0 && lastEnd != null && t0 - lastEnd >= pauseSec && words >= minWordsForPause) {
+      flush();
+    }
+
+    if (paraStart === null) paraStart = t0;
+    texts.push(segText);
+    words += segText.split(/\s+/).length;
+    sentences += (segText.match(/[.!?]+(?=\s|$)/g) || []).length;
+    lastEnd = t1;
+
+    const endsSentence = /[.!?]["']?$/.test(segText);
+    if (sentences >= maxSentences || (words >= maxWords && endsSentence) || words >= maxWords + 25) {
+      flush();
+    }
+  }
+  flush();
+  return paras;
+}
+
 export function buildWordDocHtml(opts: {
   fileName?: string;
   modelLabel?: string;
@@ -52,31 +134,49 @@ export function buildWordDocHtml(opts: {
 }): string {
   const dateStr = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
   const title = (opts.fileName || "Transcript").replace(/\.[^.]+$/, "");
+  const paragraphs = groupSegmentsIntoParagraphs(opts.segments, opts.fullText, opts.durationSec);
+  const showSections = opts.durationSec > 1800;
+  let nextSectionAt = 600;
 
   const bodyContent =
-    opts.includeTimestamps && opts.segments.length > 0
+    opts.includeTimestamps && paragraphs.some((p) => p.startSec !== null)
       ? `<table style="width:100%;border-collapse:collapse;margin-top:16px;">
           <thead>
             <tr style="background:#2C2C2E;color:#FFFFFF;">
-              <th style="text-align:left;padding:8px 10px;width:130px;font-size:12px;">Timestamp</th>
+              <th style="text-align:left;padding:8px 10px;width:90px;font-size:12px;">Time</th>
               <th style="text-align:left;padding:8px 10px;font-size:12px;">Transcript</th>
             </tr>
           </thead>
           <tbody>
-            ${opts.segments
-              .map((seg, i) => {
-                const start = formatTime(seg.timestamp?.[0]);
-                const end = seg.timestamp?.[1] != null ? formatTime(seg.timestamp[1]) : "…";
+            ${paragraphs
+              .map((p, i) => {
+                let sectionRow = "";
+                if (showSections && p.startSec != null && p.startSec >= nextSectionAt) {
+                  const secNum = Math.floor(p.startSec / 600) + 1;
+                  nextSectionAt = secNum * 600;
+                  sectionRow = `<tr style="background:#F2E4DD;"><td colspan="2" style="padding:6px 10px;font-size:11px;font-weight:600;color:#90472D;text-transform:uppercase;letter-spacing:0.6px;">Section ${secNum} · ${esc(formatTime(p.startSec))}</td></tr>`;
+                }
                 const bg = i % 2 === 1 ? "#F5F0EC" : "#FFFFFF";
-                return `<tr style="background:${bg};border-bottom:1px solid #DDD5CE;">
-                  <td style="padding:8px 10px;font-family:Consolas,monospace;font-size:12px;color:#90472D;vertical-align:top;white-space:nowrap;">${esc(start)} – ${esc(end)}</td>
-                  <td style="padding:8px 10px;font-size:14px;line-height:1.55;color:#2C2C2E;">${esc(seg.text.trim())}</td>
+                const timeLabel = p.startSec != null ? formatTime(p.startSec) : "—";
+                return `${sectionRow}<tr style="background:${bg};border-bottom:1px solid #DDD5CE;">
+                  <td style="padding:10px;font-family:Consolas,monospace;font-size:12px;color:#90472D;vertical-align:top;white-space:nowrap;">${esc(timeLabel)}</td>
+                  <td style="padding:10px;font-size:13.5px;line-height:1.6;color:#2C2C2E;">${esc(p.text)}</td>
                 </tr>`;
               })
               .join("")}
           </tbody>
         </table>`
-      : `<p style="font-size:14px;line-height:1.65;color:#2C2C2E;white-space:pre-wrap;">${esc(opts.fullText)}</p>`;
+      : paragraphs
+          .map((p) => {
+            let heading = "";
+            if (showSections && p.startSec != null && p.startSec >= nextSectionAt) {
+              const secNum = Math.floor(p.startSec / 600) + 1;
+              nextSectionAt = secNum * 600;
+              heading = `<h3 style="margin:18pt 0 6pt;font-size:11pt;color:#90472D;border-bottom:1px solid #DDD5CE;padding-bottom:3pt;">Section ${secNum} · ${esc(formatTime(p.startSec))}</h3>`;
+            }
+            return `${heading}<p style="margin:0 0 11pt 0;font-size:11pt;line-height:1.6;color:#2C2C2E;">${esc(p.text)}</p>`;
+          })
+          .join("");
 
   return `<!DOCTYPE html>
 <html xmlns:o="urn:schemas-microsoft-com:office:office"
