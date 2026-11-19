@@ -2,6 +2,8 @@ import { createSignal, onMount, onCleanup, Show, For } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { api, type TranscriptionResult, type ModelInfo } from "../lib/api";
 import { transcribeBrowserFile, cancelBrowserJob } from "../lib/browserWhisper";
+import { encodeFileToMp3, downloadContent, type TranscriptSegment } from "../lib/mediaExport";
+import TranscriptResultPanel from "./TranscriptResultPanel";
 import { useI18n } from "../lib/i18n";
 
 const isTauri = !!(window as any).__TAURI_INTERNALS__;
@@ -20,6 +22,7 @@ interface FileJob {
   status: JobStatus;
   progress: number;
   text: string;
+  segments?: TranscriptSegment[];
   language: string;
   durationMs: number;
   error: string;
@@ -56,6 +59,10 @@ export default function FileTranscriber() {
   const [models, setModels] = createSignal<ModelInfo[]>([]);
   const [activeModel, setActiveModel] = createSignal("");
   const [loadingModel, setLoadingModel] = createSignal(false);
+  const [showTimestamps, setShowTimestamps] = createSignal(true);
+  const [lastFile, setLastFile] = createSignal<File | null>(null);
+  const [mp3Converting, setMp3Converting] = createSignal(false);
+  const [mp3Pct, setMp3Pct] = createSignal(0);
 
   let unlisten: (() => void)[] = [];
   let timerInterval: ReturnType<typeof setInterval> | null = null;
@@ -131,6 +138,7 @@ export default function FileTranscriber() {
   let fileInputRef: HTMLInputElement | undefined;
 
   const addBrowserFile = async (file: File) => {
+    setLastFile(file);
     const ext = getFileExtension(file.name);
     if (!AUDIO_EXTENSIONS.includes(ext)) {
       setStatusMsg(t("fileTranscriber.unsupportedFormat"));
@@ -146,6 +154,7 @@ export default function FileTranscriber() {
       status: "transcribing",
       progress: 0,
       text: "",
+      segments: [],
       language: "en",
       durationMs: 0,
       error: "",
@@ -173,6 +182,7 @@ export default function FileTranscriber() {
         if (j && j.status !== "cancelled") {
           j.status = "done";
           j.text = result.text;
+          j.segments = result.chunks;
           j.language = result.language;
           j.durationMs = result.duration_ms;
           j.progress = 100;
@@ -190,6 +200,35 @@ export default function FileTranscriber() {
       }));
     }
   };
+
+  const isAlreadyMp3 = () => {
+    const f = lastFile();
+    return Boolean(f && (f.name.toLowerCase().endsWith(".mp3") || f.type === "audio/mpeg"));
+  };
+
+  const handleConvertToMp3 = async () => {
+    const f = lastFile();
+    if (!f || isAlreadyMp3() || mp3Converting()) return;
+    setMp3Converting(true);
+    setMp3Pct(0);
+    setStatusMsg("Converting to MP3…");
+    try {
+      const { blob } = await encodeFileToMp3(f, (pct) => {
+        setMp3Pct(pct);
+        setStatusMsg(`Encoding MP3… ${pct}%`);
+      });
+      const base = f.name.replace(/\.[^.]+$/, "");
+      downloadContent(blob, `${base}.mp3`, "audio/mpeg");
+      setStatusMsg("MP3 downloaded");
+      setTimeout(() => setStatusMsg(""), 3000);
+    } catch (e) {
+      setStatusMsg(`MP3 conversion failed: ${String(e)}`);
+    } finally {
+      setMp3Converting(false);
+    }
+  };
+
+  const latestDoneJob = () => jobs.find((j) => j.status === "done");
 
   const pickFiles = async () => {
     if (!isTauri) {
@@ -309,6 +348,22 @@ export default function FileTranscriber() {
         <Show when={loadingModel()}>
           <span class="setting-hint">{t("models.activating")}</span>
         </Show>
+        <label class="timestamp-toggle-label">
+          <input
+            type="checkbox"
+            checked={showTimestamps()}
+            onChange={(e) => setShowTimestamps(e.currentTarget.checked)}
+          />
+          <span>Include timestamps</span>
+        </label>
+        <button
+          class="btn btn-small btn-secondary"
+          disabled={!lastFile() || isAlreadyMp3() || mp3Converting()}
+          title={isAlreadyMp3() ? "File is already an MP3" : "Convert uploaded media to MP3"}
+          onClick={handleConvertToMp3}
+        >
+          {mp3Converting() ? `Converting MP3 (${mp3Pct()}%)` : "Convert to MP3"}
+        </button>
       </div>
 
       {/* Hidden file input for browser mode */}
@@ -454,6 +509,21 @@ export default function FileTranscriber() {
           )}
         </For>
       </div>
+
+      {/* Transcript Result Module */}
+      <Show when={latestDoneJob()}>
+        {(doneJob) => (
+          <TranscriptResultPanel
+            fileName={doneJob().filename}
+            modelName={activeModel() || "tiny.en"}
+            durationMs={doneJob().durationMs}
+            elapsedMs={doneJob().elapsed}
+            text={doneJob().text}
+            segments={doneJob().segments || []}
+            includeTimestamps={showTimestamps()}
+          />
+        )}
+      </Show>
 
       {/* Preview modal */}
       <Show when={previewJob()}>

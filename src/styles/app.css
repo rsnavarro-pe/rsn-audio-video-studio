@@ -3281,3 +3281,109 @@ html:has(.dictation-overlay) #app {
   font-family: monospace;
   font-size: 12px;
 }
+
+/* ── Timestamp toggle & Transcript Result Module ────────── */
+.timestamp-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--theme-text);
+  cursor: pointer;
+  margin-left: 8px;
+}
+
+.transcript-result-module {
+  margin-top: 20px;
+  padding: 16px 18px;
+  border: 1px solid var(--theme-border-light);
+  border-radius: 12px;
+  background: var(--theme-bg-alt);
+}
+
+.transcript-result-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--theme-border-light);
+}
+
+.transcript-result-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #90472d;
+}
+
+.transcript-result-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 2px;
+}
+
+.transcript-result-title-row h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.transcript-elapsed-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgba(144, 71, 45, 0.14);
+  color: #90472d;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.transcript-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.transcript-result-body {
+  margin-top: 14px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.transcript-segments {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.transcript-segment-row {
+  display: flex;
+  gap: 10px;
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+.transcript-segment-time {
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #90472d;
+  padding-top: 2px;
+}
+
+.transcript-plain-text {
+  white-space: pre-wrap;
+  line-height: 1.6;
+  font-size: 14px;
+}
+
+.transcript-empty {
+  color: var(--theme-text-muted);
+  font-size: 13px;
+}

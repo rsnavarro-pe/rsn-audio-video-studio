@@ -6,10 +6,15 @@ const SAMPLE_RATE = 16000;
 const CHUNK_SEC = 30;
 const CHUNK_SAMPLES = SAMPLE_RATE * CHUNK_SEC;
 
+type AsrOutput = {
+  text?: string;
+  chunks?: Array<{ timestamp?: [number, number | null]; text?: string }>;
+};
+
 type AsrPipeline = (
   audio: Float32Array,
   options?: Record<string, unknown>
-) => Promise<{ text?: string } | Array<{ text?: string }>>;
+) => Promise<AsrOutput | AsrOutput[]>;
 
 type WorkerRequest =
   | { type: "load"; id: string; modelId: string }
@@ -102,6 +107,7 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
       const audio = msg.pcm;
       const totalChunks = Math.max(1, Math.ceil(audio.length / CHUNK_SAMPLES));
       const textParts: string[] = [];
+      const allSegments: Array<{ timestamp: [number, number | null]; text: string }> = [];
 
       const options: Record<string, unknown> = { return_timestamps: true };
       if (!msg.modelId.endsWith(".en")) {
@@ -115,11 +121,29 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
         const start = i * CHUNK_SAMPLES;
         const end = Math.min(audio.length, start + CHUNK_SAMPLES);
         const slice = audio.subarray(start, end);
+        const offsetSec = i * CHUNK_SEC;
 
         const output = await transcriber(slice, options);
+        const single = Array.isArray(output) ? output[0] : output;
         const chunkText = Array.isArray(output)
           ? output.map((item) => item.text || "").join(" ").trim()
           : (output.text || "").trim();
+
+        const rawChunks =
+          single && Array.isArray(single.chunks) && single.chunks.length > 0
+            ? single.chunks
+            : [{ timestamp: [0, (end - start) / SAMPLE_RATE] as [number, number | null], text: chunkText }];
+
+        for (const c of rawChunks) {
+          const t0 = (c.timestamp?.[0] ?? 0) + offsetSec;
+          const t1 =
+            c.timestamp?.[1] != null
+              ? c.timestamp[1] + offsetSec
+              : offsetSec + (end - start) / SAMPLE_RATE;
+          if (c.text && c.text.trim()) {
+            allSegments.push({ timestamp: [t0, t1], text: c.text });
+          }
+        }
 
         if (chunkText) textParts.push(chunkText);
 
@@ -127,7 +151,12 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
         self.postMessage({ type: "progress", id: msg.id, pct: Math.min(99, pct) });
       }
 
-      self.postMessage({ type: "result", id: msg.id, text: textParts.join(" ").trim() });
+      self.postMessage({
+        type: "result",
+        id: msg.id,
+        text: textParts.join(" ").trim(),
+        chunks: allSegments,
+      });
     }
   } catch (err) {
     self.postMessage({

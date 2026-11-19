@@ -1,3 +1,5 @@
+import type { TranscriptSegment } from "./mediaExport";
+
 export const BROWSER_WHISPER_MODELS: Record<string, { id: string; size: string }> = {
   "tiny.en": { id: "onnx-community/whisper-tiny.en", size: "~40 MB" },
   "base.en": { id: "onnx-community/whisper-base.en", size: "~75 MB" },
@@ -7,14 +9,16 @@ export const BROWSER_WHISPER_MODELS: Record<string, { id: string; size: string }
 
 const DEFAULT_MODEL = "tiny.en";
 
+type WorkerResult = { text: string; chunks: TranscriptSegment[] };
+
 type WorkerResponse =
   | { type: "progress"; id: string; pct: number }
   | { type: "loaded"; id: string }
-  | { type: "result"; id: string; text: string }
+  | { type: "result"; id: string; text: string; chunks?: TranscriptSegment[] }
   | { type: "error"; id: string; error: string };
 
 interface PendingRequest {
-  resolve: (value: string) => void;
+  resolve: (value: WorkerResult) => void;
   reject: (reason?: unknown) => void;
   onProgress?: (pct: number) => void;
 }
@@ -51,12 +55,12 @@ function getWorker(): Worker {
     } else if (msg.type === "loaded") {
       modelReady = true;
       pending.delete(msg.id);
-      req.resolve("");
+      req.resolve({ text: "", chunks: [] });
     } else if (msg.type === "result") {
       modelReady = true;
       pending.delete(msg.id);
       req.onProgress?.(100);
-      req.resolve(msg.text);
+      req.resolve({ text: msg.text, chunks: msg.chunks || [] });
     } else if (msg.type === "error") {
       pending.delete(msg.id);
       req.reject(new Error(msg.error));
@@ -98,7 +102,7 @@ export async function loadBrowserWhisper(
   const id = `load_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const w = getWorker();
 
-  await new Promise<string>((resolve, reject) => {
+  await new Promise<WorkerResult>((resolve, reject) => {
     pending.set(id, { resolve, reject, onProgress });
     w.postMessage({ type: "load", id, modelId });
   });
@@ -143,13 +147,13 @@ export async function transcribeBrowserPcm(
   const copy = new Float32Array(pcm);
 
   const w = getWorker();
-  const text = await new Promise<string>((resolve, reject) => {
+  const res = await new Promise<WorkerResult>((resolve, reject) => {
     pending.set(id, { resolve, reject, onProgress });
     w.postMessage({ type: "transcribe", id, modelId, pcm: copy }, [copy.buffer]);
   });
 
   return {
-    text,
+    text: res.text,
     language: "en",
     duration_ms: durationMs,
   };
@@ -160,7 +164,7 @@ export async function transcribeBrowserFile(
   modelName?: string,
   onProgress?: (pct: number) => void,
   jobId?: string
-): Promise<{ text: string; language: string; duration_ms: number }> {
+): Promise<{ text: string; chunks: TranscriptSegment[]; language: string; duration_ms: number }> {
   const id = jobId || `job_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const modelId = resolveModelId(modelName);
 
@@ -169,13 +173,14 @@ export async function transcribeBrowserFile(
   onProgress?.(20);
 
   const w = getWorker();
-  const text = await new Promise<string>((resolve, reject) => {
+  const res = await new Promise<WorkerResult>((resolve, reject) => {
     pending.set(id, { resolve, reject, onProgress });
     w.postMessage({ type: "transcribe", id, modelId, pcm }, [pcm.buffer]);
   });
 
   return {
-    text,
+    text: res.text,
+    chunks: res.chunks,
     language: "en",
     duration_ms: durationMs,
   };
