@@ -234,8 +234,8 @@ function loadLocalSettings(): Settings {
     if (raw) {
       const parsed = JSON.parse(raw) as Settings;
       if (!BROWSER_MODEL_NAMES.has(parsed.model_name)) {
-        parsed.model_name = "tiny.en";
-        parsed.model_path = "onnx-community/whisper-tiny.en";
+        parsed.model_name = "base.en";
+        parsed.model_path = "onnx-community/whisper-base.en";
       }
       if (!parsed.language || parsed.language === "nl") {
         parsed.language = "en";
@@ -246,8 +246,8 @@ function loadLocalSettings(): Settings {
   return {
     language: "en",
     ui_language: "en",
-    model_name: "tiny.en",
-    model_path: "onnx-community/whisper-tiny.en",
+    model_name: "base.en",
+    model_path: "onnx-community/whisper-base.en",
     use_gpu: false,
     hotkey: "Ctrl+Super",
     hotkey_mode: "hold",
@@ -576,7 +576,7 @@ async function stopBrowserWhisperRecording(): Promise<TranscriptionResult> {
   const result = await transcribeBrowserPcm(
     resampled,
     durationMs,
-    currentSettings.model_name || "tiny.en"
+    currentSettings.model_name || "base.en"
   );
   const text = applyDictionary(result.text.trim());
   return { text, language: "en", duration_ms: durationMs };

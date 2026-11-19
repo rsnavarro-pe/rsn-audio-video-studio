@@ -46,22 +46,21 @@ export interface StructuredParagraph {
   text: string;
 }
 
-function getParagraphLimits(durationSec: number) {
-  if (durationSec > 1800) {
-    return { maxSentences: 5, maxWords: 135, minWordsForPause: 30, pauseSec: 1.8 };
-  }
-  if (durationSec >= 300) {
-    return { maxSentences: 4, maxWords: 105, minWordsForPause: 25, pauseSec: 1.8 };
-  }
-  return { maxSentences: 3, maxWords: 75, minWordsForPause: 20, pauseSec: 1.8 };
-}
+const MAX_SENTENCES_PER_PARA = 5;
+const MAX_WORDS_PER_PARA = 135;
+const MIN_WORDS_FOR_PAUSE = 25;
+const PAUSE_GAP_SEC = 1.8;
+const SECTION_INTERVAL_SEC = 300; // 5 minutes
 
 export function groupSegmentsIntoParagraphs(
   segments: TranscriptSegment[],
   fullText: string,
-  durationSec: number
+  _durationSec: number
 ): StructuredParagraph[] {
-  const { maxSentences, maxWords, minWordsForPause, pauseSec } = getParagraphLimits(durationSec);
+  const maxSentences = MAX_SENTENCES_PER_PARA;
+  const maxWords = MAX_WORDS_PER_PARA;
+  const minWordsForPause = MIN_WORDS_FOR_PAUSE;
+  const pauseSec = PAUSE_GAP_SEC;
 
   if (!segments || segments.length === 0) {
     const sentences = (fullText || "").trim().split(/(?<=[.!?])\s+/).filter(Boolean);
@@ -135,8 +134,8 @@ export function buildWordDocHtml(opts: {
   const dateStr = new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
   const title = (opts.fileName || "Transcript").replace(/\.[^.]+$/, "");
   const paragraphs = groupSegmentsIntoParagraphs(opts.segments, opts.fullText, opts.durationSec);
-  const showSections = opts.durationSec > 1800;
-  let nextSectionAt = 600;
+  const showSections = opts.durationSec >= SECTION_INTERVAL_SEC;
+  let nextSectionAt = SECTION_INTERVAL_SEC;
 
   const bodyContent =
     opts.includeTimestamps && paragraphs.some((p) => p.startSec !== null)
@@ -152,8 +151,8 @@ export function buildWordDocHtml(opts: {
               .map((p, i) => {
                 let sectionRow = "";
                 if (showSections && p.startSec != null && p.startSec >= nextSectionAt) {
-                  const secNum = Math.floor(p.startSec / 600) + 1;
-                  nextSectionAt = secNum * 600;
+                  const secNum = Math.floor(p.startSec / SECTION_INTERVAL_SEC) + 1;
+                  nextSectionAt = secNum * SECTION_INTERVAL_SEC;
                   sectionRow = `<tr style="background:#F2E4DD;"><td colspan="2" style="padding:6px 10px;font-size:11px;font-weight:600;color:#90472D;text-transform:uppercase;letter-spacing:0.6px;">Section ${secNum} · ${esc(formatTime(p.startSec))}</td></tr>`;
                 }
                 const bg = i % 2 === 1 ? "#F5F0EC" : "#FFFFFF";
@@ -170,8 +169,8 @@ export function buildWordDocHtml(opts: {
           .map((p) => {
             let heading = "";
             if (showSections && p.startSec != null && p.startSec >= nextSectionAt) {
-              const secNum = Math.floor(p.startSec / 600) + 1;
-              nextSectionAt = secNum * 600;
+              const secNum = Math.floor(p.startSec / SECTION_INTERVAL_SEC) + 1;
+              nextSectionAt = secNum * SECTION_INTERVAL_SEC;
               heading = `<h3 style="margin:18pt 0 6pt;font-size:11pt;color:#90472D;border-bottom:1px solid #DDD5CE;padding-bottom:3pt;">Section ${secNum} · ${esc(formatTime(p.startSec))}</h3>`;
             }
             return `${heading}<p style="margin:0 0 11pt 0;font-size:11pt;line-height:1.6;color:#2C2C2E;">${esc(p.text)}</p>`;

@@ -7,7 +7,7 @@ export const BROWSER_WHISPER_MODELS: Record<string, { id: string; size: string }
   "small": { id: "onnx-community/whisper-small", size: "~250 MB" },
 };
 
-const DEFAULT_MODEL = "tiny.en";
+const DEFAULT_MODEL = "base.en";
 
 type WorkerResult = { text: string; chunks: TranscriptSegment[] };
 

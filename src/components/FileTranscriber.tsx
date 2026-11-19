@@ -73,7 +73,7 @@ export default function FileTranscriber() {
       const m = await api.getAvailableModels();
       setModels(m);
       const settings = await api.getSettings();
-      setActiveModel(settings.model_name || m[0]?.name || "tiny.en");
+      setActiveModel(settings.model_name || "base.en");
     } catch (_) {}
 
     // Timer to update elapsed time on active jobs
@@ -167,7 +167,7 @@ export default function FileTranscriber() {
     try {
       const result = await transcribeBrowserFile(
         file,
-        activeModel() || "tiny.en",
+        activeModel() || "base.en",
         (pct) => {
           setJobs(produce((draft) => {
             const j = draft.find((item) => item.id === jobId);
@@ -515,7 +515,7 @@ export default function FileTranscriber() {
         {(doneJob) => (
           <TranscriptResultPanel
             fileName={doneJob().filename}
-            modelName={activeModel() || "tiny.en"}
+            modelName={activeModel() || "base.en"}
             durationMs={doneJob().durationMs}
             elapsedMs={doneJob().elapsed}
             text={doneJob().text}
