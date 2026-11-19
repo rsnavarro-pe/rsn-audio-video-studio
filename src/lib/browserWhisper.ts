@@ -9,6 +9,13 @@ export const BROWSER_WHISPER_MODELS: Record<string, { id: string; size: string }
 
 const DEFAULT_MODEL = "base.en";
 
+export function getMaxConcurrentWorkers(): number {
+  const cores = typeof navigator !== "undefined" ? navigator.hardwareConcurrency || 4 : 4;
+  const mem = typeof navigator !== "undefined" ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory : undefined;
+  if (mem !== undefined && mem <= 4) return 2;
+  return Math.min(3, Math.max(2, Math.floor(cores / 2)));
+}
+
 type WorkerResult = { text: string; chunks: TranscriptSegment[] };
 
 type WorkerResponse =
@@ -17,15 +24,24 @@ type WorkerResponse =
   | { type: "result"; id: string; text: string; chunks?: TranscriptSegment[] }
   | { type: "error"; id: string; error: string };
 
-interface PendingRequest {
+interface QueuedTask {
+  id: string;
+  type: "load" | "transcribe";
+  modelId: string;
+  pcm?: Float32Array;
   resolve: (value: WorkerResult) => void;
   reject: (reason?: unknown) => void;
   onProgress?: (pct: number) => void;
 }
 
-let worker: Worker | null = null;
+interface WorkerSlot {
+  worker: Worker;
+  activeTask: QueuedTask | null;
+}
+
+const slots: WorkerSlot[] = [];
+const queue: QueuedTask[] = [];
 let modelReady = false;
-const pending = new Map<string, PendingRequest>();
 
 export function resolveModelId(modelName?: string): string {
   if (modelName && BROWSER_WHISPER_MODELS[modelName]) {
@@ -38,59 +54,86 @@ export function isBrowserModelReady(): boolean {
   return modelReady;
 }
 
-function getWorker(): Worker {
-  if (worker) return worker;
+function createSlot(): WorkerSlot {
+  const w = new Worker(new URL("./whisper.worker.ts", import.meta.url), { type: "module" });
+  const slot: WorkerSlot = { worker: w, activeTask: null };
 
-  worker = new Worker(new URL("./whisper.worker.ts", import.meta.url), {
-    type: "module",
-  });
-
-  worker.addEventListener("message", (event: MessageEvent<WorkerResponse>) => {
+  w.addEventListener("message", (event: MessageEvent<WorkerResponse>) => {
     const msg = event.data;
-    const req = pending.get(msg.id);
-    if (!req) return;
+    const task = slot.activeTask;
+    if (!task || task.id !== msg.id) return;
 
     if (msg.type === "progress") {
-      req.onProgress?.(msg.pct);
+      task.onProgress?.(msg.pct);
     } else if (msg.type === "loaded") {
       modelReady = true;
-      pending.delete(msg.id);
-      req.resolve({ text: "", chunks: [] });
+      slot.activeTask = null;
+      task.resolve({ text: "", chunks: [] });
+      drainQueue();
     } else if (msg.type === "result") {
       modelReady = true;
-      pending.delete(msg.id);
-      req.onProgress?.(100);
-      req.resolve({ text: msg.text, chunks: msg.chunks || [] });
+      slot.activeTask = null;
+      task.onProgress?.(100);
+      task.resolve({ text: msg.text, chunks: msg.chunks || [] });
+      drainQueue();
     } else if (msg.type === "error") {
-      pending.delete(msg.id);
-      req.reject(new Error(msg.error));
+      slot.activeTask = null;
+      task.reject(new Error(msg.error));
+      drainQueue();
     }
   });
 
-  worker.addEventListener("error", (err) => {
-    for (const [id, req] of pending.entries()) {
-      pending.delete(id);
-      req.reject(new Error(err.message || "Whisper worker error"));
-    }
+  w.addEventListener("error", (err) => {
+    const task = slot.activeTask;
+    slot.activeTask = null;
+    if (task) task.reject(new Error(err.message || "Whisper worker error"));
+    drainQueue();
   });
 
-  return worker;
+  slots.push(slot);
+  return slot;
+}
+
+function drainQueue(): void {
+  const maxWorkers = getMaxConcurrentWorkers();
+  while (queue.length > 0) {
+    let freeSlot = slots.find((s) => s.activeTask === null);
+    if (!freeSlot && slots.length < maxWorkers) {
+      freeSlot = createSlot();
+    }
+    if (!freeSlot) break;
+
+    const task = queue.shift()!;
+    freeSlot.activeTask = task;
+    if (task.type === "load") {
+      freeSlot.worker.postMessage({ type: "load", id: task.id, modelId: task.modelId });
+    } else if (task.pcm) {
+      freeSlot.worker.postMessage(
+        { type: "transcribe", id: task.id, modelId: task.modelId, pcm: task.pcm },
+        [task.pcm.buffer]
+      );
+    }
+  }
 }
 
 export function cancelBrowserJob(jobId?: string): void {
-  if (jobId && pending.has(jobId)) {
-    const req = pending.get(jobId)!;
-    pending.delete(jobId);
-    req.reject(new Error("Transcription cancelled"));
+  if (!jobId) return;
+  const qIdx = queue.findIndex((t) => t.id === jobId);
+  if (qIdx !== -1) {
+    const [removed] = queue.splice(qIdx, 1);
+    removed.reject(new Error("Transcription cancelled"));
+    return;
   }
-  if (worker) {
-    worker.terminate();
-    worker = null;
-    modelReady = false;
-  }
-  for (const [id, req] of pending.entries()) {
-    pending.delete(id);
-    req.reject(new Error("Worker reset after cancellation"));
+
+  const sIdx = slots.findIndex((s) => s.activeTask?.id === jobId);
+  if (sIdx !== -1) {
+    const slot = slots[sIdx];
+    const task = slot.activeTask;
+    slot.activeTask = null;
+    slot.worker.terminate();
+    slots.splice(sIdx, 1);
+    task?.reject(new Error("Transcription cancelled"));
+    drainQueue();
   }
 }
 
@@ -100,11 +143,10 @@ export async function loadBrowserWhisper(
 ): Promise<void> {
   const modelId = resolveModelId(modelName);
   const id = `load_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  const w = getWorker();
 
   await new Promise<WorkerResult>((resolve, reject) => {
-    pending.set(id, { resolve, reject, onProgress });
-    w.postMessage({ type: "load", id, modelId });
+    queue.push({ id, type: "load", modelId, resolve, reject, onProgress });
+    drainQueue();
   });
 }
 
@@ -146,17 +188,12 @@ export async function transcribeBrowserPcm(
   const modelId = resolveModelId(modelName);
   const copy = new Float32Array(pcm);
 
-  const w = getWorker();
   const res = await new Promise<WorkerResult>((resolve, reject) => {
-    pending.set(id, { resolve, reject, onProgress });
-    w.postMessage({ type: "transcribe", id, modelId, pcm: copy }, [copy.buffer]);
+    queue.push({ id, type: "transcribe", modelId, pcm: copy, resolve, reject, onProgress });
+    drainQueue();
   });
 
-  return {
-    text: res.text,
-    language: "en",
-    duration_ms: durationMs,
-  };
+  return { text: res.text, language: "en", duration_ms: durationMs };
 }
 
 export async function transcribeBrowserFile(
@@ -172,10 +209,9 @@ export async function transcribeBrowserFile(
   const { pcm, durationMs } = await decodeFileTo16kHzMono(file);
   onProgress?.(20);
 
-  const w = getWorker();
   const res = await new Promise<WorkerResult>((resolve, reject) => {
-    pending.set(id, { resolve, reject, onProgress });
-    w.postMessage({ type: "transcribe", id, modelId, pcm }, [pcm.buffer]);
+    queue.push({ id, type: "transcribe", modelId, pcm, resolve, reject, onProgress });
+    drainQueue();
   });
 
   return {

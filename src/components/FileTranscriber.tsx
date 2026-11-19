@@ -228,7 +228,15 @@ export default function FileTranscriber() {
     }
   };
 
-  const latestDoneJob = () => jobs.find((j) => j.status === "done");
+  const [selectedJobId, setSelectedJobId] = createSignal<string | null>(null);
+  const latestDoneJob = () => {
+    const sel = selectedJobId();
+    if (sel) {
+      const found = jobs.find((j) => j.id === sel && j.status === "done");
+      if (found) return found;
+    }
+    return jobs.find((j) => j.status === "done");
+  };
 
   const pickFiles = async () => {
     if (!isTauri) {
@@ -438,6 +446,7 @@ export default function FileTranscriber() {
           {(job) => (
             <div
               class={`file-job-card file-job-${job.status}`}
+              onClick={() => job.status === "done" && setSelectedJobId(job.id)}
               onDblClick={() => job.status === "done" && job.text && setPreviewJob({ ...job })}
             >
               <div class="file-job-header">
