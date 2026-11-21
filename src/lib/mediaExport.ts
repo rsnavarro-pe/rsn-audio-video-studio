@@ -296,3 +296,125 @@ export async function encodeFileToMp3(
 
   return { blob: new Blob(mp3Chunks, { type: "audio/mpeg" }), durationSec: decoded.duration };
 }
+
+export const SPLIT_THRESHOLD_BYTES = 199 * 1024 * 1024; // 199 MB
+export const SPLIT_CHUNK_BYTES = 150 * 1024 * 1024; // 150 MB
+
+function writeWavHeader(
+  dataLength: number,
+  channels: number,
+  sampleRate: number,
+  bitsPerSample = 16
+): Uint8Array {
+  const header = new ArrayBuffer(44);
+  const view = new DataView(header);
+  const writeStr = (off: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+  };
+  const byteRate = (sampleRate * channels * bitsPerSample) / 8;
+  const blockAlign = (channels * bitsPerSample) / 8;
+
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataLength, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, channels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeStr(36, "data");
+  view.setUint32(40, dataLength, true);
+  return new Uint8Array(header);
+}
+
+export async function splitAudioFileToChunks(
+  file: File,
+  onProgress?: (pct: number) => void
+): Promise<Array<{ name: string; blob: Blob }>> {
+  if (file.size <= SPLIT_THRESHOLD_BYTES) {
+    throw new Error("File must be larger than 199 MB to split.");
+  }
+  const base = file.name.replace(/\.[^.]+$/, "");
+  const maxPayload = SPLIT_CHUNK_BYTES - 44;
+
+  // Fast path for PCM WAV files: slice raw data without full AudioContext decode
+  if (file.name.toLowerCase().endsWith(".wav") || file.type === "audio/wav") {
+    onProgress?.(10);
+    const headBuf = await file.slice(0, 44).arrayBuffer();
+    const headView = new DataView(headBuf);
+    const channels = headView.getUint16(22, true) || 1;
+    const sampleRate = headView.getUint32(24, true) || 44100;
+    const bitsPerSample = headView.getUint16(34, true) || 16;
+    const blockAlign = Math.max(1, (channels * bitsPerSample) / 8);
+    const alignedPayload = Math.floor(maxPayload / blockAlign) * blockAlign;
+
+    const totalData = file.size - 44;
+    const totalParts = Math.ceil(totalData / alignedPayload);
+    const parts: Array<{ name: string; blob: Blob }> = [];
+
+    for (let idx = 0; idx < totalParts; idx++) {
+      const start = 44 + idx * alignedPayload;
+      const end = Math.min(file.size, start + alignedPayload);
+      const sliceBlob = file.slice(start, end);
+      const hdr = writeWavHeader(end - start, channels, sampleRate, bitsPerSample);
+      parts.push({
+        name: `${base}_part${idx + 1}.wav`,
+        blob: new Blob([hdr as BlobPart, sliceBlob], { type: "audio/wav" }),
+      });
+      onProgress?.(10 + Math.round(((idx + 1) / totalParts) * 90));
+    }
+    return parts;
+  }
+
+  onProgress?.(10);
+  const arrayBuffer = await file.arrayBuffer();
+  onProgress?.(30);
+
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const audioCtx = new AudioCtx();
+  let decoded: AudioBuffer;
+  try {
+    decoded = await audioCtx.decodeAudioData(arrayBuffer);
+  } finally {
+    await audioCtx.close().catch(() => {});
+  }
+
+  const channels = Math.min(2, decoded.numberOfChannels || 1);
+  const sampleRate = decoded.sampleRate || 44100;
+  const blockAlign = channels * 2;
+  const samplesPerChunk = Math.floor(maxPayload / blockAlign);
+  const totalSamples = decoded.length;
+  const totalParts = Math.ceil(totalSamples / samplesPerChunk);
+  const parts: Array<{ name: string; blob: Blob }> = [];
+
+  const chData = Array.from({ length: channels }, (_, c) => decoded.getChannelData(c));
+
+  for (let p = 0; p < totalParts; p++) {
+    const startSample = p * samplesPerChunk;
+    const endSample = Math.min(totalSamples, startSample + samplesPerChunk);
+    const count = endSample - startSample;
+    const pcm16 = new Int16Array(count * channels);
+
+    for (let i = 0; i < count; i++) {
+      for (let c = 0; c < channels; c++) {
+        const s = Math.max(-1, Math.min(1, chData[c][startSample + i]));
+        pcm16[i * channels + c] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+    }
+
+    const hdr = writeWavHeader(pcm16.byteLength, channels, sampleRate, 16);
+    parts.push({
+      name: `${base}_part${p + 1}.wav`,
+      blob: new Blob([hdr as BlobPart, pcm16.buffer], { type: "audio/wav" }),
+    });
+    onProgress?.(30 + Math.round(((p + 1) / totalParts) * 70));
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  return parts;
+}

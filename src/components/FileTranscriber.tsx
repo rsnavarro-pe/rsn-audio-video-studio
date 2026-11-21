@@ -2,7 +2,13 @@ import { createSignal, onMount, onCleanup, Show, For } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { api, type TranscriptionResult, type ModelInfo } from "../lib/api";
 import { transcribeBrowserFile, cancelBrowserJob } from "../lib/browserWhisper";
-import { encodeFileToMp3, downloadContent, type TranscriptSegment } from "../lib/mediaExport";
+import {
+  encodeFileToMp3,
+  downloadContent,
+  splitAudioFileToChunks,
+  SPLIT_THRESHOLD_BYTES,
+  type TranscriptSegment,
+} from "../lib/mediaExport";
 import TranscriptResultPanel from "./TranscriptResultPanel";
 import { useI18n } from "../lib/i18n";
 
@@ -63,6 +69,8 @@ export default function FileTranscriber() {
   const [lastFile, setLastFile] = createSignal<File | null>(null);
   const [mp3Converting, setMp3Converting] = createSignal(false);
   const [mp3Pct, setMp3Pct] = createSignal(0);
+  const [splitting, setSplitting] = createSignal(false);
+  const [splitPct, setSplitPct] = createSignal(0);
 
   let unlisten: (() => void)[] = [];
   let timerInterval: ReturnType<typeof setInterval> | null = null;
@@ -228,6 +236,35 @@ export default function FileTranscriber() {
     }
   };
 
+  const isOver199Mb = () => {
+    const f = lastFile();
+    return Boolean(f && f.size > SPLIT_THRESHOLD_BYTES);
+  };
+
+  const handleSplitFile = async () => {
+    const f = lastFile();
+    if (!f || !isOver199Mb() || splitting()) return;
+    setSplitting(true);
+    setSplitPct(0);
+    setStatusMsg("Splitting audio into 150 MB chunks…");
+    try {
+      const parts = await splitAudioFileToChunks(f, (pct) => {
+        setSplitPct(pct);
+        setStatusMsg(`Splitting audio… ${pct}%`);
+      });
+      for (const part of parts) {
+        downloadContent(part.blob, part.name, "audio/wav");
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      setStatusMsg(`Split into ${parts.length} chunks (≤150 MB each)`);
+      setTimeout(() => setStatusMsg(""), 4000);
+    } catch (e) {
+      setStatusMsg(`Split failed: ${String(e)}`);
+    } finally {
+      setSplitting(false);
+    }
+  };
+
   const [selectedJobId, setSelectedJobId] = createSignal<string | null>(null);
   const latestDoneJob = () => {
     const sel = selectedJobId();
@@ -366,11 +403,19 @@ export default function FileTranscriber() {
         </label>
         <button
           class="btn btn-small btn-secondary"
-          disabled={!lastFile() || isAlreadyMp3() || mp3Converting()}
+          disabled={!lastFile() || isAlreadyMp3() || mp3Converting() || splitting()}
           title={isAlreadyMp3() ? "File is already an MP3" : "Convert uploaded media to MP3"}
           onClick={handleConvertToMp3}
         >
           {mp3Converting() ? `Converting MP3 (${mp3Pct()}%)` : "Convert to MP3"}
+        </button>
+        <button
+          class="btn btn-small btn-secondary"
+          disabled={!isOver199Mb() || splitting() || mp3Converting()}
+          title={isOver199Mb() ? "Split into 150 MB chunks" : "Available for files larger than 199 MB"}
+          onClick={handleSplitFile}
+        >
+          {splitting() ? `Splitting (${splitPct()}%)` : "Split (>199 MB)"}
         </button>
       </div>
 
